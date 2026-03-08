@@ -44,7 +44,7 @@ class SamGovFeed:
 
     @retry_async(max_retries=2)
     async def poll(self, lookback_hours: int = 24) -> List[ContractAward]:
-        """Poll SAM.gov for recent contract awards above threshold."""
+        """Poll SAM.gov for recent contract awards above threshold. Handles pagination."""
         if not self.api_key:
             logger.warning("SAM_GOV_API_KEY not set, skipping SAM.gov poll")
             return []
@@ -52,53 +52,77 @@ class SamGovFeed:
         posted_from = (datetime.utcnow() - timedelta(hours=lookback_hours)).strftime("%m/%d/%Y")
         posted_to = datetime.utcnow().strftime("%m/%d/%Y")
 
-        params = {
-            "api_key": self.api_key,
-            "postedFrom": posted_from,
-            "postedTo": posted_to,
-            "ptype": "a",  # awards only
-            "limit": 100,
-        }
-
         awards = []
+        offset = 0
+        page_size = 100
+        max_pages = 10  # Safety limit: 1000 results max
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(SAM_API_BASE, params=params) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        logger.error(f"SAM.gov API error {resp.status}: {body}")
-                        return []
+                for page in range(max_pages):
+                    params = {
+                        "api_key": self.api_key,
+                        "postedFrom": posted_from,
+                        "postedTo": posted_to,
+                        "ptype": "a",  # awards only
+                        "limit": page_size,
+                        "offset": offset,
+                    }
 
-                    data = await resp.json()
+                    async with session.get(SAM_API_BASE, params=params) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            logger.error(f"SAM.gov API error {resp.status}: {body}")
+                            break
 
-            opportunities = data.get("opportunitiesData", [])
-            logger.info(f"SAM.gov returned {len(opportunities)} opportunities")
+                        data = await resp.json()
 
-            for opp in opportunities:
-                award_info = opp.get("award", {})
-                amount = self._parse_amount(award_info)
-                if amount is None or amount < self.min_contract_value:
-                    continue
+                    opportunities = data.get("opportunitiesData", [])
+                    total_records = data.get("totalRecords", 0)
 
-                awardee = award_info.get("awardee", {}).get("name", "")
-                if not awardee:
-                    continue
+                    if page == 0:
+                        logger.info(
+                            f"SAM.gov: {total_records} total opportunities, "
+                            f"fetching in pages of {page_size}"
+                        )
 
-                award = ContractAward(
-                    notice_id=opp.get("noticeId", ""),
-                    title=opp.get("title", ""),
-                    awardee=awardee,
-                    award_amount=amount,
-                    posted_date=opp.get("postedDate", ""),
-                    department=opp.get("department", ""),
-                    agency=opp.get("fullParentPathName", ""),
-                    naics_code=opp.get("naicsCode", ""),
-                    description=opp.get("description", "")[:500],
-                    url=f"https://sam.gov/opp/{opp.get('noticeId', '')}",
-                )
-                awards.append(award)
+                    if not opportunities:
+                        break
 
-            logger.info(f"SAM.gov: {len(awards)} awards above ${self.min_contract_value / 1_000_000:.0f}M threshold")
+                    for opp in opportunities:
+                        award_info = opp.get("award", {})
+                        amount = self._parse_amount(award_info)
+                        if amount is None or amount < self.min_contract_value:
+                            continue
+
+                        awardee = award_info.get("awardee", {}).get("name", "")
+                        if not awardee:
+                            continue
+
+                        award = ContractAward(
+                            notice_id=opp.get("noticeId", ""),
+                            title=opp.get("title", ""),
+                            awardee=awardee,
+                            award_amount=amount,
+                            posted_date=opp.get("postedDate", ""),
+                            department=opp.get("department", ""),
+                            agency=opp.get("fullParentPathName", ""),
+                            naics_code=opp.get("naicsCode", ""),
+                            description=opp.get("description", "")[:500],
+                            url=f"https://sam.gov/opp/{opp.get('noticeId', '')}",
+                        )
+                        awards.append(award)
+
+                    # Check if we've fetched all records
+                    offset += len(opportunities)
+                    if offset >= total_records:
+                        break
+
+            logger.info(
+                f"SAM.gov: {len(awards)} awards above "
+                f"${self.min_contract_value / 1_000_000:.0f}M threshold "
+                f"(scanned {offset} opportunities)"
+            )
             self._last_poll = datetime.utcnow()
 
         except Exception as e:

@@ -48,6 +48,15 @@ class GovBot:
         self.ensemble = EnsembleRunner(self.config)
         self.notifier = TelegramNotifier(self.config.telegram_token, self.config.telegram_chat_id)
 
+        # Register Telegram command callbacks
+        self.notifier.register_callbacks(
+            get_status=self._get_status,
+            get_positions=self._get_positions,
+            pause_callback=self._pause,
+            resume_callback=self._resume,
+            is_paused=lambda: self.paused,
+        )
+
     def _setup_logging(self):
         log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
         handlers = [logging.StreamHandler(sys.stdout)]
@@ -60,6 +69,40 @@ class GovBot:
             format=log_format,
             handlers=handlers,
         )
+
+    # --- Telegram command callbacks ---
+
+    def _get_status(self) -> dict:
+        """Return status dict for /status command."""
+        summary = self.position_manager.summary()
+        summary["mode"] = "PAPER" if self.config.paper_mode else "LIVE"
+        return summary
+
+    def _get_positions(self) -> dict:
+        """Return positions dict for /positions command."""
+        positions = []
+        for pos in self.position_manager.open_positions:
+            positions.append({
+                "ticker": pos.ticker,
+                "side": pos.side,
+                "entry_price": pos.entry_price,
+                "shares": pos.shares,
+                "current_price": pos.high_water_mark,  # best available without live quote
+                "catalyst": pos.catalyst,
+            })
+        return {"positions": positions}
+
+    def _pause(self):
+        """Pause scanning."""
+        self.paused = True
+        logger.info("Bot paused via Telegram command")
+
+    def _resume(self):
+        """Resume scanning."""
+        self.paused = False
+        logger.info("Bot resumed via Telegram command")
+
+    # --- Main run loop ---
 
     async def run(self):
         """Main run loop."""
@@ -76,6 +119,9 @@ class GovBot:
             f"Scan interval: {self.config.scan_interval_minutes}m"
         )
 
+        # Start Telegram command polling
+        await self.notifier.start_polling()
+
         # Verify brokerage connection
         try:
             account = await self.brokerage.get_account()
@@ -84,6 +130,7 @@ class GovBot:
             logger.warning(f"Brokerage connection check failed: {e}")
             if not self.config.paper_mode:
                 logger.error("Cannot run in LIVE mode without brokerage connection")
+                await self.notifier.stop_polling()
                 return
 
         while self.running:
@@ -103,6 +150,8 @@ class GovBot:
                 await self.notifier.error(f"Scan cycle error: {e}")
                 await asyncio.sleep(60)  # Brief pause on error
 
+        # Clean up
+        await self.notifier.stop_polling()
         logger.info("GovBot stopped")
 
     async def _run_scan_cycle(self):
@@ -111,7 +160,7 @@ class GovBot:
         logger.info(f"--- Scan cycle starting at {cycle_start.isoformat()} ---")
 
         # Step 1: Check existing positions for risk exits
-        await self.trader.check_and_close_positions()
+        await self._check_and_close_positions()
 
         # Step 2: Scan all data feeds
         signals = await self.scanner.scan_feeds()
@@ -135,6 +184,25 @@ class GovBot:
 
         logger.info(f"Resolved {len(resolved_signals)}/{len(signals)} signals to tickers")
 
+        # Step 3.5: Market cap filter
+        if self.config.min_market_cap > 0 or self.config.max_market_cap > 0:
+            filtered = []
+            for sig in resolved_signals:
+                passes = await self.company_resolver.passes_market_cap_filter(
+                    sig.ticker,
+                    min_cap=self.config.min_market_cap,
+                    max_cap=self.config.max_market_cap,
+                )
+                if passes:
+                    filtered.append(sig)
+                else:
+                    logger.info(f"Filtered out {sig.ticker}: market cap outside range")
+            resolved_signals = filtered
+
+            if not resolved_signals:
+                logger.info("No signals passed market cap filter")
+                return
+
         # Step 4: Get market data and run AI analysis
         for sig in resolved_signals:
             try:
@@ -147,6 +215,49 @@ class GovBot:
 
         elapsed = (datetime.utcnow() - cycle_start).total_seconds()
         logger.info(f"--- Scan cycle complete in {elapsed:.1f}s ---")
+
+    async def _check_and_close_positions(self):
+        """Wrapper around trader.check_and_close_positions that sends notifications."""
+        for position in list(self.position_manager.open_positions):
+            try:
+                quote = await self.brokerage.get_quote(position.ticker)
+                current_price = quote["price"]
+            except Exception as e:
+                logger.error(f"Failed to get price for {position.ticker}: {e}")
+                continue
+
+            exit_reason = self.position_manager.check_risk(position, current_price)
+            if exit_reason:
+                if self.config.paper_mode:
+                    logger.info(
+                        f"[PAPER] Closing {position.ticker}: {exit_reason} "
+                        f"@ ${current_price:.2f}"
+                    )
+                else:
+                    side = "sell" if position.side == "LONG" else "buy"
+                    order_id = await self.brokerage.place_order(
+                        ticker=position.ticker,
+                        side=side,
+                        qty=position.shares,
+                    )
+                    if not order_id:
+                        logger.error(f"Failed to close {position.ticker}")
+                        continue
+
+                # Calculate P&L before closing for notification
+                if position.side == "LONG":
+                    pnl = (current_price - position.entry_price) * position.shares
+                else:
+                    pnl = (position.entry_price - current_price) * position.shares
+
+                self.position_manager.close_position(position, current_price, exit_reason)
+
+                # Send position_closed notification
+                await self.notifier.position_closed(
+                    ticker=position.ticker,
+                    exit_reason=exit_reason,
+                    pnl=pnl,
+                )
 
     async def _process_signal(self, sig):
         """Process a single resolved signal: get price, analyze, maybe trade."""
