@@ -15,7 +15,7 @@ rsync -avz --exclude '.env' \
     ./ "$PI_HOST:$REMOTE_DIR/"
 
 echo "Installing dependencies on Pi..."
-ssh "$PI_HOST" "cd $REMOTE_DIR && pip3 install -r requirements.txt"
+ssh "$PI_HOST" "cd $REMOTE_DIR && .venv/bin/pip install -r requirements.txt"
 
 echo "Restarting govbot service..."
 ssh "$PI_HOST" "sudo systemctl restart govbot"
