@@ -29,6 +29,10 @@ class Config:
     sam_gov_api_key: str = os.getenv("SAM_GOV_API_KEY", "")
     congress_api_key: str = os.getenv("CONGRESS_API_KEY", "")
     sec_user_agent: str = os.getenv("SEC_USER_AGENT", "GovBot research@example.com")
+    quiverquant_api_token: str = os.getenv("QUIVERQUANT_API_TOKEN", "")
+
+    # Congress trading parameters
+    congress_trade_min_amount: float = float(os.getenv("CONGRESS_TRADE_MIN_AMOUNT", "15000"))
 
     # AI providers
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0] - 2026-03-10
+
+### Added
+- **QuiverQuant Congress trading feed** (`feeds/congress_trading.py`): polls QuiverQuant API for stock trades by U.S. Congress members. Focuses on purchases as bullish signals. Parses politician name, party, chamber, ticker, transaction type, STOCK Act amount range, transaction date, and disclosure date. Filters for significant trades (>$15K, configurable via `CONGRESS_TRADE_MIN_AMOUNT`). Three signal tiers:
+  - `CONGRESS_TRADE_BUY` -- single significant purchase by a Congress member
+  - `CONGRESS_TRADE_CLUSTER` -- multiple members buying the same stock within 14 days (with bipartisan detection)
+  - `CONGRESS_TRADE_COMMITTEE` -- committee-relevant purchase (e.g., Armed Services member buying defense stocks). Seed list of 18 high-profile traders and their committee assignments. 80+ ticker-to-sector mappings for committee relevance checks.
+- Disclosure lag tracking: calculates days between transaction and disclosure date. Late disclosures (>30 days) are flagged in signal details.
+- Deduplication: tracks seen trades to avoid re-signaling on subsequent polls.
+- `QUIVERQUANT_API_TOKEN` config var and `.env.example` entry.
+
+### Changed
+- **Signal scanner** (`core/signal_scanner.py`): integrated Congress trading feed alongside existing feeds. New `_scan_congress_trading()` method converts trade signals into unified Signal objects with full details for AI analysis.
+- **Main loop** (`main.py`): signals with pre-resolved tickers (Congress trading, EDGAR with tickers) now skip the company resolver step, avoiding failed fuzzy matches on ticker symbols.
+
 ## [0.3.0] - 2026-03-10
 
 ### Added

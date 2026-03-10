@@ -8,6 +8,7 @@ from feeds.sam_gov import SamGovFeed, ContractAward
 from feeds.sec_edgar import SecEdgarFeed, EdgarFiling
 from feeds.federal_register import FederalRegisterFeed, FedRegDocument
 from feeds.congress import CongressFeed, CongressBill
+from feeds.congress_trading import CongressTradingFeed, CongressTradeSignal
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Signal:
     """A unified signal from any data feed."""
-    source: str  # "SAM_CONTRACT" | "SEC_8K" | "SEC_FORM4" | "SEC_13D" | "FED_REGISTER" | "CONGRESS"
+    source: str  # "SAM_CONTRACT" | "SEC_8K" | "SEC_FORM4" | "SEC_13D" | "FED_REGISTER" | "CONGRESS" | "CONGRESS_TRADE_BUY" | "CONGRESS_TRADE_CLUSTER" | "CONGRESS_TRADE_COMMITTEE"
     company_name: str
     ticker: Optional[str]  # None if not yet resolved
     title: str
@@ -47,6 +48,10 @@ class SignalScanner:
         self.edgar_feed = SecEdgarFeed(user_agent=config.sec_user_agent)
         self.fed_register_feed = FederalRegisterFeed()
         self.congress_feed = CongressFeed(api_key=config.congress_api_key)
+        self.congress_trading_feed = CongressTradingFeed(
+            api_token=config.quiverquant_api_token,
+            min_amount=config.congress_trade_min_amount,
+        )
 
     async def scan_feeds(self) -> List[Signal]:
         """Poll all active feeds and return unified signals."""
@@ -67,6 +72,10 @@ class SignalScanner:
         # Congress.gov bills
         congress_signals = await self._scan_congress()
         signals.extend(congress_signals)
+
+        # QuiverQuant Congress member stock trades
+        congress_trade_signals = await self._scan_congress_trading()
+        signals.extend(congress_trade_signals)
 
         logger.info(f"Total signals from all feeds: {len(signals)}")
         return signals
@@ -228,5 +237,129 @@ class SignalScanner:
                 },
             )
             signals.append(signal)
+
+        return signals
+
+    async def _scan_congress_trading(self) -> List[Signal]:
+        """Scan QuiverQuant for Congress member stock trades."""
+        try:
+            trade_signals = await self.congress_trading_feed.poll()
+        except Exception as e:
+            logger.error(f"Congress trading scan failed: {e}")
+            return []
+
+        signals = []
+        for ts in trade_signals:
+            if ts.cluster:
+                # Cluster signal -- multiple members buying same stock
+                cluster = ts.cluster
+                members = [t.representative for t in cluster.trades]
+                parties = [t.party for t in cluster.trades]
+                member_list = ", ".join(
+                    f"{name} ({party})" for name, party in zip(members, parties)
+                )
+                bipartisan_tag = " [BIPARTISAN]" if cluster.bipartisan else ""
+
+                signal = Signal(
+                    source=ts.signal_type,
+                    company_name=cluster.ticker,  # Already a ticker
+                    ticker=cluster.ticker,
+                    title=(
+                        f"Congress Cluster Buy: {cluster.unique_members} members buying "
+                        f"{cluster.ticker}{bipartisan_tag}"
+                    ),
+                    details=(
+                        f"Ticker: {cluster.ticker}\n"
+                        f"Members ({cluster.unique_members}): {member_list}\n"
+                        f"Combined amount: ${cluster.total_amount_low:,.0f} - ${cluster.total_amount_high:,.0f}\n"
+                        f"Window: {cluster.window_days} days\n"
+                        f"Bipartisan: {'Yes' if cluster.bipartisan else 'No'}"
+                        + (f"\nCommittee relevance: {ts.committee_relevance} ({ts.sector_match})" if ts.committee_relevance else "")
+                    ),
+                    dollar_value=(cluster.total_amount_low + cluster.total_amount_high) / 2,
+                    url="https://www.quiverquant.com/congresstrading/",
+                    raw_data={
+                        "signal_type": ts.signal_type,
+                        "ticker": cluster.ticker,
+                        "unique_members": cluster.unique_members,
+                        "members": members,
+                        "parties": parties,
+                        "total_amount_low": cluster.total_amount_low,
+                        "total_amount_high": cluster.total_amount_high,
+                        "bipartisan": cluster.bipartisan,
+                        "committee_relevance": ts.committee_relevance,
+                        "sector_match": ts.sector_match,
+                        "trades": [
+                            {
+                                "representative": t.representative,
+                                "party": t.party,
+                                "chamber": t.chamber,
+                                "amount_range": t.amount_range,
+                                "transaction_date": t.transaction_date,
+                                "report_date": t.report_date,
+                                "disclosure_lag_days": t.disclosure_lag_days,
+                            }
+                            for t in cluster.trades
+                        ],
+                    },
+                )
+                signals.append(signal)
+
+            elif ts.trade:
+                # Individual trade signal (BUY or COMMITTEE)
+                trade = ts.trade
+                lag_note = ""
+                if trade.disclosure_lag_days > 30:
+                    lag_note = f" [LATE DISCLOSURE: {trade.disclosure_lag_days}d lag]"
+                elif trade.disclosure_lag_days > 14:
+                    lag_note = f" [Disclosure lag: {trade.disclosure_lag_days}d]"
+
+                committee_note = ""
+                if ts.committee_relevance:
+                    committee_note = (
+                        f"\nCommittee relevance: {ts.committee_relevance} "
+                        f"committee member trading in {ts.sector_match} sector"
+                    )
+
+                signal = Signal(
+                    source=ts.signal_type,
+                    company_name=trade.ticker,  # Already a ticker
+                    ticker=trade.ticker,
+                    title=(
+                        f"Congress Trade: {trade.representative} ({trade.party}-{trade.chamber}) "
+                        f"bought {trade.ticker}{lag_note}"
+                    ),
+                    details=(
+                        f"Ticker: {trade.ticker}\n"
+                        f"Representative: {trade.representative}\n"
+                        f"Party: {trade.party} | Chamber: {trade.chamber}\n"
+                        f"Transaction: {trade.transaction}\n"
+                        f"Amount: {trade.amount_range}\n"
+                        f"Transaction date: {trade.transaction_date}\n"
+                        f"Disclosure date: {trade.report_date}\n"
+                        f"Disclosure lag: {trade.disclosure_lag_days} days"
+                        + committee_note
+                        + (f"\nDescription: {trade.description}" if trade.description else "")
+                    ),
+                    dollar_value=(trade.amount_low + trade.amount_high) / 2,
+                    url="https://www.quiverquant.com/congresstrading/",
+                    raw_data={
+                        "signal_type": ts.signal_type,
+                        "representative": trade.representative,
+                        "party": trade.party,
+                        "chamber": trade.chamber,
+                        "ticker": trade.ticker,
+                        "transaction": trade.transaction,
+                        "amount_range": trade.amount_range,
+                        "amount_low": trade.amount_low,
+                        "amount_high": trade.amount_high,
+                        "transaction_date": trade.transaction_date,
+                        "report_date": trade.report_date,
+                        "disclosure_lag_days": trade.disclosure_lag_days,
+                        "committee_relevance": ts.committee_relevance,
+                        "sector_match": ts.sector_match,
+                    },
+                )
+                signals.append(signal)
 
         return signals

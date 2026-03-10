@@ -175,7 +175,10 @@ class GovBot:
         # Step 3: Resolve company names to tickers (or ETFs for macro signals)
         resolved_signals = []
         for sig in signals:
-            if self.sector_etf_mapper.is_macro_signal(sig.source):
+            if sig.ticker:
+                # Signal already has a ticker (e.g., Congress trading, EDGAR with ticker)
+                resolved_signals.append(sig)
+            elif self.sector_etf_mapper.is_macro_signal(sig.source):
                 # Macro signal -- map sector to ETF instead of company resolver
                 sector = sig.raw_data.get("affected_sector") or sig.raw_data.get("sector") or sig.company_name
                 etf = self.sector_etf_mapper.resolve(sector)

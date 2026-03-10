@@ -1,5 +1,45 @@
 # Dev Log
 
+## 2026-03-10 -- Session 4: QuiverQuant Congress Trading Feed
+
+New data feed that tracks stock trades made by members of the U.S. Congress, using the QuiverQuant API.
+
+**Why this matters:**
+Congress members are required to disclose stock trades under the STOCK Act, but there's often a lag between when they trade and when they disclose. Members on committees with oversight of specific industries may have informational advantages. Academic research shows Congress member trades have historically outperformed the market.
+
+**What got built:**
+
+1. **Congress trading feed** (`feeds/congress_trading.py`) -- Full implementation using raw aiohttp calls to the QuiverQuant REST API (`/beta/bulk/congresstrading`). Auth via `Authorization: Token <token>` header. Paginated fetching with configurable lookback window. Parses all STOCK Act disclosure fields: representative, party (D/R/I), chamber (House/Senate), ticker, transaction type, amount range, transaction date, report date.
+
+2. **Three signal tiers:**
+   - `CONGRESS_TRADE_BUY` -- Individual significant purchase (amount > $15K configurable)
+   - `CONGRESS_TRADE_CLUSTER` -- 2+ members buying same ticker within 14 days. Bipartisan clusters (both D and R buying) flagged as stronger signal.
+   - `CONGRESS_TRADE_COMMITTEE` -- Member trades in a stock related to their committee assignment. E.g., Armed Services member buying LMT, or Banking committee member buying JPM. This is the highest-conviction signal tier.
+
+3. **Committee relevance engine** -- Maps 15+ Congressional committees to industry sectors, and 80+ stock tickers to sectors. Seed list of 18 high-profile Congress traders and their committee assignments. When a known member trades a stock in their committee's domain, the signal gets upgraded to CONGRESS_TRADE_COMMITTEE.
+
+4. **Disclosure lag tracking** -- Calculates days between transaction date and report date. Trades disclosed >30 days late get a [LATE DISCLOSURE] flag. The theory: if someone delays disclosure, the information advantage was larger.
+
+5. **STOCK Act amount range parser** -- Handles all standard disclosure ranges ($1K-$15K through $50M+) plus edge cases. Extracts low/high bounds for filtering and aggregation.
+
+**Integration:**
+- Signal scanner (`core/signal_scanner.py`) calls the new feed in `scan_feeds()` alongside existing feeds. The `_scan_congress_trading()` method converts trade signals into unified Signal objects.
+- Main loop (`main.py`) updated: signals that already have a ticker set (Congress trading signals have tickers from the API) skip the company resolver. Previously, all non-macro signals went through fuzzy company name matching, which would fail on raw ticker symbols.
+- Config (`utils/config.py`): added `QUIVERQUANT_API_TOKEN` and `CONGRESS_TRADE_MIN_AMOUNT` env vars.
+- No new pip dependencies -- uses existing aiohttp.
+
+**Architecture notes:**
+- Congress trading signals are NOT macro signals (unlike Congress.gov bills or FedReg rules). They point to specific tickers, so they go through the normal company-level pipeline (market cap filter, AI analysis, etc.) rather than the sector ETF mapper.
+- Deduplication uses a set of "representative|ticker|date" keys, pruned at 5K entries to prevent unbounded growth.
+- The committee relevance engine is seeded with known data. In production, this could be enriched by fetching committee rosters from the Congress API.
+
+**Next steps:**
+- Get a QuiverQuant API token from api.quiverquant.com
+- Test with `scripts/test_feeds.py` (add congress_trading test case)
+- Consider adding the QuiverQuant Senate/House filter to focus on one chamber
+- Consider enriching committee data dynamically from Congress API
+- Monitor for API rate limits and adjust pagination accordingly
+
 ## 2026-03-10 -- Session 3: Sector ETF Mapper + News Enrichment
 
 Two features that close out the main Session 2 TODOs:
