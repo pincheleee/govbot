@@ -14,8 +14,10 @@ from core.signal_scanner import SignalScanner
 from core.company_resolver import CompanyResolver
 from core.position_manager import PositionManager
 from core.live_trader import LiveTrader
+from core.sector_etf_mapper import SectorETFMapper
 from ai.analyzer import GovSignalAnalyzer
 from ai.ensemble import EnsembleRunner
+from ai.news_fetcher import NewsFetcher
 from brokerages.alpaca import AlpacaBrokerage
 
 logger = logging.getLogger("govbot")
@@ -46,6 +48,8 @@ class GovBot:
         self.trader = LiveTrader(self.brokerage, self.position_manager, self.config)
         self.analyzer = GovSignalAnalyzer(self.config)
         self.ensemble = EnsembleRunner(self.config)
+        self.news_fetcher = NewsFetcher()
+        self.sector_etf_mapper = SectorETFMapper()
         self.notifier = TelegramNotifier(self.config.telegram_token, self.config.telegram_chat_id)
 
         # Register Telegram command callbacks
@@ -168,15 +172,26 @@ class GovBot:
             logger.info("No signals this cycle")
             return
 
-        # Step 3: Resolve company names to tickers
+        # Step 3: Resolve company names to tickers (or ETFs for macro signals)
         resolved_signals = []
         for sig in signals:
-            ticker = self.company_resolver.resolve(sig.company_name)
-            if ticker:
-                sig.ticker = ticker
-                resolved_signals.append(sig)
+            if self.sector_etf_mapper.is_macro_signal(sig.source):
+                # Macro signal -- map sector to ETF instead of company resolver
+                sector = sig.raw_data.get("affected_sector") or sig.raw_data.get("sector") or sig.company_name
+                etf = self.sector_etf_mapper.resolve(sector)
+                if etf:
+                    sig.ticker = etf
+                    resolved_signals.append(sig)
+                    logger.info(f"Macro signal: {sig.source} sector '{sector}' -> {etf}")
+                else:
+                    logger.info(f"No ETF mapping for macro signal sector: {sector}")
             else:
-                logger.info(f"Could not resolve company: {sig.company_name}")
+                ticker = self.company_resolver.resolve(sig.company_name)
+                if ticker:
+                    sig.ticker = ticker
+                    resolved_signals.append(sig)
+                else:
+                    logger.info(f"Could not resolve company: {sig.company_name}")
 
         if not resolved_signals:
             logger.info("No signals with resolved tickers this cycle")
@@ -281,12 +296,25 @@ class GovBot:
         if current_price <= 0:
             return
 
+        # Fetch recent news to enrich AI context
+        news_context = ""
+        try:
+            news_items = await self.news_fetcher.fetch(ticker)
+            if news_items:
+                headlines = [f"- {n['title']} ({n['source']})" for n in news_items[:8]]
+                news_context = "\n\nRECENT NEWS:\n" + "\n".join(headlines)
+                logger.info(f"News: {len(news_items)} items fetched for {ticker}")
+        except Exception as e:
+            logger.debug(f"News fetch failed for {ticker}: {e}")
+
+        enriched_details = sig.details + news_context
+
         # Run AI analysis (ensemble if multiple providers configured)
         if len(self.config.ai_ensemble_providers) > 1:
             consensus = await self.ensemble.run(
                 ticker=ticker,
                 catalyst_type=sig.source,
-                catalyst_details=sig.details,
+                catalyst_details=enriched_details,
                 current_price=current_price,
                 daily_change=daily_change,
                 volume=volume,
@@ -299,7 +327,7 @@ class GovBot:
             result = await self.analyzer.analyze(
                 ticker=ticker,
                 catalyst_type=sig.source,
-                catalyst_details=sig.details,
+                catalyst_details=enriched_details,
                 current_price=current_price,
                 daily_change=daily_change,
                 volume=volume,

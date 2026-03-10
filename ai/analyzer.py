@@ -28,6 +28,7 @@ ANALYSIS TASK:
 2. Has the market already priced this in?
    - Check if the stock already moved today (daily change)
    - Consider if volume is elevated vs normal
+   - If recent news headlines are provided, check if this signal was already reported
 
 3. What is the expected magnitude and timeline?
    - Contract awards: typically 2-5% move over 1-3 days for large-caps
