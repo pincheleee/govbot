@@ -1,5 +1,28 @@
 # Dev Log
 
+## 2026-03-10 -- Session 3: Sector ETF Mapper + News Enrichment
+
+Two features that close out the main Session 2 TODOs:
+
+**What got built:**
+
+1. **Sector-to-ETF mapper** (`core/sector_etf_mapper.py`) -- Macro signals from Federal Register and Congress feeds now map to sector ETFs instead of going through the company resolver (which couldn't match sector names like "Defense" or "Healthcare" to tickers). Maps 12+ sectors to primary ETFs with alternates: defense->ITA, healthcare->XLV, tech->XLK, energy->XLE, finance->XLF, infrastructure->PAVE, trade->EFA, telecom->XLC, broad market->SPY. Case-insensitive lookup.
+
+2. **News-enriched AI analysis** -- The news fetcher (already built in Session 2) is now wired into the analysis pipeline. Before the AI analyzes a signal, it fetches up to 8 recent headlines for the ticker and appends them to the prompt. The AI prompt was updated to check whether the signal was already reported in news (priced-in detection). This prevents the bot from trading on stale catalysts.
+
+3. **Feed test script** (`scripts/test_feeds.py`) -- Standalone harness to test each feed in isolation. Supports `python scripts/test_feeds.py [sam|edgar|fedreg|congress|news|etf|all]`. Useful for verifying API keys and response parsing without running the full bot.
+
+**Integration in main.py:**
+- Step 3 (resolve) now branches: macro signals (FED_REGISTER, CONGRESS) go through SectorETFMapper, everything else goes through CompanyResolver as before.
+- Step 5 (analyze) fetches news before calling the AI, appends headlines to catalyst_details.
+
+**Next steps:**
+- Get SEC_USER_AGENT set to a real email address (SEC requirement)
+- Get CONGRESS_API_KEY from api.congress.gov
+- Test each feed with `scripts/test_feeds.py` once API keys are configured
+- Deploy to Pi and run a few cycles to verify end-to-end
+- Consider position sizing adjustments for ETF trades vs single stocks
+
 ## 2026-03-08 -- Session 2: Phase 2+3 Implementation (All Feeds Live)
 
 Fleshed out all stubs and incomplete features. Every data feed now has real API integration. No new dependencies added -- everything uses aiohttp and stdlib XML parsing.

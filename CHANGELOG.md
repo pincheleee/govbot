@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0] - 2026-03-10
+
+### Added
+- **Sector-to-ETF mapper** (`core/sector_etf_mapper.py`): maps macro signals (FedReg, Congress) to tradeable sector ETFs. Covers defense (ITA), healthcare (XLV), tech (XLK), energy (XLE), finance (XLF), infrastructure (PAVE), trade (EFA), telecom (XLC), and broad market (SPY). Case-insensitive matching with alternates list.
+- **News-enriched AI analysis** (`main.py`): news fetcher output (up to 8 headlines) is now injected into the AI prompt as context, allowing the analyzer to detect already-priced-in signals.
+- **Feed test script** (`scripts/test_feeds.py`): standalone test harness for each data feed (SAM, EDGAR, FedReg, Congress, news, ETF mapper). Supports testing individual feeds or all at once.
+
+### Changed
+- **Macro signal routing** (`main.py`): FedReg and Congress signals now route through the ETF mapper instead of the company resolver, which previously failed to match sector names to tickers.
+- **AI prompt** (`ai/analyzer.py`): added instruction to check if recent news headlines already cover the signal (priced-in detection).
+
 ## [0.2.0] - 2026-03-08
 
 ### Added
