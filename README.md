@@ -132,9 +132,16 @@ Service: `govbot.service` (systemd)
 
 ## Current Status
 
-- v0.4.0 (2026-03-10)
+- v0.5.0 (2026-03-16)
 - All 6 data feeds implemented and functional
 - Sector ETF mapping for macro signals
 - News-enriched AI analysis with priced-in detection
 - Congress member trade tracking with committee relevance scoring
 - Deployed to Pi (service disabled pending API key setup)
+
+### Recent Changes (v0.5.0)
+
+- Startup config validation -- missing/invalid env vars caught before the scan loop starts
+- Market cap filter fails closed -- if the market cap lookup errors out, the signal is rejected rather than passed through
+- Trailing stop fix for short positions -- trailing stop logic now correctly handles short-side P&L
+- Unit tests being added for core modules
