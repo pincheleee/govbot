@@ -72,3 +72,22 @@ class Config:
 
     # Paths
     data_dir: str = os.getenv("DATA_DIR", "data")
+
+    def __post_init__(self):
+        errors = []
+        if not self.sec_user_agent or "example.com" in self.sec_user_agent:
+            errors.append(
+                "SEC_USER_AGENT must be set to a real contact "
+                "(e.g. 'BotName you@yourdomain.com'), not example.com"
+            )
+        if not self.anthropic_api_key and not self.deepseek_api_key:
+            errors.append(
+                "At least one AI provider key required: "
+                "set ANTHROPIC_API_KEY or DEEPSEEK_API_KEY"
+            )
+        if not self.alpaca_api_key:
+            errors.append("ALPACA_API_KEY must be set")
+        if not self.alpaca_secret_key:
+            errors.append("ALPACA_SECRET_KEY must be set")
+        if errors:
+            raise ValueError("Config validation failed:\n  - " + "\n  - ".join(errors))

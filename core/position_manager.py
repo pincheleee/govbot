@@ -185,7 +185,7 @@ class PositionManager:
                 if drawdown >= self.config.trailing_stop_pct:
                     return "TRAILING_STOP"
         else:
-            if current_price < position.high_water_mark or position.high_water_mark == position.entry_price:
+            if current_price < position.high_water_mark:
                 position.high_water_mark = current_price
             if position.high_water_mark < position.entry_price * (1 - self.config.trailing_stop_activation_pct):
                 drawup = (current_price - position.high_water_mark) / position.high_water_mark

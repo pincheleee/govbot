@@ -277,16 +277,15 @@ class CompanyResolver:
             max_cap: Maximum market cap in dollars. 0 = no maximum.
 
         Returns:
-            True if the ticker passes the filter (or if market cap data is unavailable).
+            True if the ticker passes the filter. False if data is unavailable (fail closed).
         """
         if min_cap == 0 and max_cap == 0:
             return True
 
         info = await self.get_financials(ticker)
         if info is None or info.market_cap == 0:
-            # If we can't get market cap data, let it through with a warning
-            logger.warning(f"No market cap data for {ticker}, allowing through filter")
-            return True
+            logger.warning(f"No market cap data for {ticker}, rejecting (fail closed)")
+            return False
 
         if min_cap > 0 and info.market_cap < min_cap:
             logger.info(
