@@ -2,6 +2,14 @@
 
 AI-assisted equity trading bot that exploits government data publication lag. Monitors federal contracts, SEC filings, regulatory actions, congressional legislation, and Congress member stock trades -- then identifies affected companies, runs AI ensemble analysis, and executes paper trades via Alpaca.
 
+## Project Status
+
+- Status: stable
+- Last major update: 2026-03-16
+- Current focus: validating government-data signal quality and keeping the paper-trading pipeline reliable
+- Run: `python main.py`
+- Next step: continue improving signal quality and deployment readiness without loosening risk controls
+
 > **Paper mode by default.** Proof of concept -- validating signal quality before committing real capital.
 
 ## How It Works
